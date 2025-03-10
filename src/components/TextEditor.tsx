@@ -1,15 +1,39 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Edit3 } from 'lucide-react';
+import { useToast } from "@/hooks/use-toast";
 
 export const TextEditor = () => {
   const [text, setText] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [misspelledWords, setMisspelledWords] = useState<Array<{word: string, index: number, suggestion: string}>>([]);
   const [tone, setTone] = useState('neutral');
+  const [highlightedText, setHighlightedText] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { toast } = useToast();
+
+  // Mock dictionary for spell checking
+  const dictionary = {
+    'teh': 'the',
+    'thier': 'their',
+    'recieve': 'receive',
+    'wierd': 'weird',
+    'alot': 'a lot',
+    'definately': 'definitely',
+    'seperate': 'separate',
+    'occured': 'occurred',
+    'beleive': 'believe',
+    'accomodate': 'accommodate',
+    'untill': 'until',
+    'begining': 'beginning',
+    'its': 'it\'s',
+    'your': 'you\'re',
+    'their': 'they\'re',
+  };
 
   const analyzeTone = () => {
     // Simplified tone analysis
@@ -23,32 +47,71 @@ export const TextEditor = () => {
     }
   };
 
-  const checkGrammar = () => {
-    // Simple grammar checking logic (placeholder)
-    const commonErrors = [
-      { error: "its", correction: "it's" },
-      { error: "your", correction: "you're" },
-      { error: "their", correction: "they're" },
-    ];
-
-    const newSuggestions = [];
-    const words = text.split(' ');
+  const checkSpelling = (content: string) => {
+    const words = content.split(/\s+/);
+    const misspelled: Array<{word: string, index: number, suggestion: string}> = [];
+    const newSuggestions: string[] = [];
     
-    for (const word of words) {
-      const error = commonErrors.find(e => e.error === word.toLowerCase());
-      if (error) {
-        newSuggestions.push(`Consider using "${error.correction}" instead of "${word}"`);
+    words.forEach((word, idx) => {
+      // Remove punctuation for checking
+      const cleanWord = word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+      
+      if (cleanWord.length > 0 && dictionary[cleanWord as keyof typeof dictionary]) {
+        const suggestion = dictionary[cleanWord as keyof typeof dictionary];
+        const wordIndex = content.indexOf(word, idx > 0 ? words.slice(0, idx).join(' ').length : 0);
+        
+        misspelled.push({
+          word: cleanWord,
+          index: wordIndex,
+          suggestion
+        });
+        
+        newSuggestions.push(`"${cleanWord}" should be "${suggestion}"`);
       }
-    }
+    });
     
+    setMisspelledWords(misspelled);
     setSuggestions(newSuggestions);
+    
+    // Create highlighted HTML with misspelled words
+    let highlightedContent = content;
+    misspelled.sort((a, b) => b.index - a.index).forEach(item => {
+      const start = item.index;
+      const end = start + item.word.length;
+      const before = highlightedContent.substring(0, start);
+      const misspelledWord = highlightedContent.substring(start, end);
+      const after = highlightedContent.substring(end);
+      highlightedContent = `${before}<span class="text-red-500 underline decoration-wavy">${misspelledWord}</span>${after}`;
+    });
+    
+    setHighlightedText(highlightedContent);
+  };
+
+  const applyCorrection = (originalWord: string, correctedWord: string) => {
+    const newText = text.replace(new RegExp(originalWord, 'gi'), correctedWord);
+    setText(newText);
+    
+    // Re-check spelling after correction
+    checkSpelling(newText);
+    
+    toast({
+      title: "Correction Applied",
+      description: `Changed "${originalWord}" to "${correctedWord}"`,
+      variant: "default",
+    });
   };
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
-    if (e.target.value.length > 10) {
+    const newText = e.target.value;
+    setText(newText);
+    
+    if (newText.length > 2) {
+      checkSpelling(newText);
       analyzeTone();
-      checkGrammar();
+    } else {
+      setSuggestions([]);
+      setMisspelledWords([]);
+      setHighlightedText('');
     }
   };
 
@@ -66,30 +129,54 @@ export const TextEditor = () => {
           </Badge>
         </div>
         
-        <Textarea
-          value={text}
-          onChange={handleTextChange}
-          placeholder="Start writing here..."
-          className="min-h-[200px] resize-none focus:ring-2 focus:ring-accent/50"
-        />
+        <div className="relative">
+          <Textarea
+            ref={textareaRef}
+            value={text}
+            onChange={handleTextChange}
+            placeholder="Start writing here..."
+            className="min-h-[200px] resize-none focus:ring-2 focus:ring-accent/50"
+          />
+          
+          {highlightedText && (
+            <div 
+              className="absolute inset-0 pointer-events-none p-3 text-transparent bg-transparent"
+              dangerouslySetInnerHTML={{ __html: highlightedText }}
+            />
+          )}
+        </div>
 
         {suggestions.length > 0 && (
           <div className="space-y-2">
             <h3 className="text-sm font-medium text-gray-700">Suggestions:</h3>
             <ul className="space-y-1">
-              {suggestions.map((suggestion, index) => (
-                <li key={index} className="flex items-center gap-2 text-sm text-gray-600">
-                  <AlertCircle className="w-4 h-4 text-amber-500" />
-                  {suggestion}
-                </li>
-              ))}
+              {suggestions.map((suggestion, index) => {
+                const parts = suggestion.split('"');
+                const originalWord = parts[1];
+                const correctedWord = parts[3];
+                
+                return (
+                  <li key={index} className="flex items-center gap-2 text-sm">
+                    <AlertCircle className="w-4 h-4 text-red-500" />
+                    <span className="text-gray-600">{suggestion}</span>
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="h-6 px-2 ml-2 text-xs border-accent text-accent"
+                      onClick={() => applyCorrection(originalWord, correctedWord)}
+                    >
+                      <Edit3 className="w-3 h-3 mr-1" /> Apply
+                    </Button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
 
         <div className="flex justify-end gap-2">
           <Button
-            onClick={checkGrammar}
+            onClick={() => checkSpelling(text)}
             className="bg-accent hover:bg-accent/90 text-white"
           >
             <CheckCircle2 className="w-4 h-4 mr-2" />
